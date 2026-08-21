@@ -1,0 +1,310 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  RECEPTION
+}
+
+// Access is unrestricted when hostelIds is empty. When hostelIds has exactly one entry,
+// unitIds may further restrict access to specific units within that hostel.
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  username     String   @unique
+  passwordHash String
+  role         Role     @default(RECEPTION)
+  hostelIds    String[] @default([])
+  unitIds      String[] @default([])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Hostel {
+  id          String   @id @default(uuid())
+  name        String
+  code        String   @unique
+  address     String?
+  phone       String?
+  email       String?
+  description String?
+  currency    String   @default("AED")
+  vatEnabled  Boolean  @default(true)
+  vatPercent  Float    @default(5)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  units       Unit[]
+  rooms       Room[]
+  tenants     Tenant[]
+  contracts   Contract[]
+  obligations RentObligation[]
+  payments    Payment[]
+  income      Income[]
+  expenses    Expense[]
+  deposits    Deposit[]
+}
+
+model Unit {
+  id          String   @id @default(uuid())
+  hostelId    String
+  hostel      Hostel   @relation(fields: [hostelId], references: [id], onDelete: Cascade)
+  name        String
+  type        String   @default("Apartment")
+  description String?
+  status      String   @default("Active")
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rooms       Room[]
+
+  @@index([hostelId])
+}
+
+model Room {
+  id              String   @id @default(uuid())
+  hostelId        String
+  hostel          Hostel   @relation(fields: [hostelId], references: [id], onDelete: Cascade)
+  unitId          String
+  unit            Unit     @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  name            String
+  type            String   @default("Single")
+  capacity        Int      @default(1)
+  dailyPrice      Float    @default(0)
+  weeklyPrice     Float    @default(0)
+  monthlyPrice    Float    @default(0)
+  deposit         Float    @default(0)
+  depositRequired Boolean  @default(true)
+  status          String   @default("Available") // Available | Occupied | Reserved | Maintenance | Inactive
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenants     Tenant[]
+  contracts   Contract[]
+  obligations RentObligation[]
+  payments    Payment[]
+  income      Income[]
+  deposits    Deposit[]
+
+  @@index([hostelId])
+  @@index([unitId])
+}
+
+model Tenant {
+  id               String    @id @default(uuid())
+  fullName         String
+  phone            String
+  altPhone         String?
+  email            String?
+  nationality      String?
+  idType           String?
+  idNumber         String?
+  idExpiry         DateTime?
+  dob              DateTime?
+  emergencyContact String?
+  emergencyPhone   String?
+  address          String?
+  notes            String?
+  status           String   @default("Inactive") // derived from roomId, kept in sync server-side — never set directly
+  hostelId         String?
+  hostel           Hostel?  @relation(fields: [hostelId], references: [id])
+  roomId           String?
+  room             Room?    @relation(fields: [roomId], references: [id])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  contracts   Contract[]
+  obligations RentObligation[]
+  payments    Payment[]
+  income      Income[]
+  deposits    Deposit[]
+  documents   TenantDocument[]
+
+  @@index([roomId])
+}
+
+model TenantDocument {
+  id           String   @id @default(uuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  type         String   // "ID" | "PASSPORT"
+  filename     String   // original filename, for display only
+  storedName   String   // randomly generated name on disk — never derived from user input
+  mimeType     String
+  size         Int
+  uploadedById String?
+  uploadedAt   DateTime @default(now())
+
+  @@unique([tenantId, type]) // one current file per document type; re-upload replaces it
+  @@index([tenantId])
+}
+
+model Contract {
+  id               String    @id @default(uuid())
+  tenantId         String
+  tenant           Tenant    @relation(fields: [tenantId], references: [id])
+  hostelId         String
+  hostel           Hostel    @relation(fields: [hostelId], references: [id])
+  unitId           String
+  roomId           String
+  room             Room      @relation(fields: [roomId], references: [id])
+  startDate        DateTime
+  endDate          DateTime?
+  billingFrequency String    @default("Monthly") // Daily | Weekly | Monthly
+  rentAmount       Float
+  deposit          Float     @default(0)
+  vat              Float     @default(5)
+  discount         Float     @default(0)
+  lateFeeType      String    @default("Fixed")
+  lateFeeValue     Float     @default(0)
+  dueDay           Int       @default(1)
+  status           String    @default("Active") // Draft | Active | Expired | Terminated
+  endReason        String?   // set when checkOutDate is set — how/why it ended (checkout, manual, auto)
+  notes            String?
+  checkInDate      DateTime?
+  checkOutDate     DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  obligations RentObligation[]
+  payments    Payment[]
+  deposit_    Deposit?
+
+  @@index([hostelId])
+  @@index([tenantId])
+  @@index([roomId])
+}
+
+model RentObligation {
+  id         String   @id @default(uuid())
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  hostelId   String
+  hostel     Hostel   @relation(fields: [hostelId], references: [id])
+  roomId     String
+  room       Room     @relation(fields: [roomId], references: [id])
+  dueDate    DateTime
+  amount     Float
+  paidAmount Float    @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  payments Payment[]
+
+  @@index([contractId])
+  @@index([dueDate])
+  @@index([hostelId])
+}
+
+model Payment {
+  id           String          @id @default(uuid())
+  tenantId     String
+  tenant       Tenant          @relation(fields: [tenantId], references: [id])
+  contractId   String
+  contract     Contract        @relation(fields: [contractId], references: [id])
+  obligationId String?
+  obligation   RentObligation? @relation(fields: [obligationId], references: [id])
+  hostelId     String
+  hostel       Hostel          @relation(fields: [hostelId], references: [id])
+  roomId       String
+  room         Room            @relation(fields: [roomId], references: [id])
+  date         DateTime        @default(now())
+  dueDate      DateTime?
+  amount       Float
+  method       String          @default("Cash") // Cash | Bank Transfer | Card | Other
+  reference    String?
+  notes        String?
+  status       String          @default("Paid") // Paid | Partial
+  createdAt    DateTime        @default(now())
+
+  @@index([hostelId])
+  @@index([tenantId])
+  @@index([date])
+}
+
+model Income {
+  id          String   @id @default(uuid())
+  date        DateTime @default(now())
+  hostelId    String
+  hostel      Hostel   @relation(fields: [hostelId], references: [id])
+  unitId      String?
+  roomId      String?
+  room        Room?    @relation(fields: [roomId], references: [id])
+  tenantId    String?
+  tenant      Tenant?  @relation(fields: [tenantId], references: [id])
+  category    String   @default("Other") // Rent | Deposit | Fees | Late Fee | Other
+  amount      Float
+  method      String   @default("Cash")
+  reference   String?
+  description String?
+  createdAt   DateTime @default(now())
+
+  @@index([hostelId])
+  @@index([date])
+}
+
+model Expense {
+  id          String   @id @default(uuid())
+  date        DateTime @default(now())
+  hostelId    String
+  hostel      Hostel   @relation(fields: [hostelId], references: [id])
+  unitId      String?
+  category    String   @default("Other")
+  amount      Float
+  method      String   @default("Cash")
+  vendor      String?
+  reference   String?
+  description String?
+  createdAt   DateTime @default(now())
+
+  @@index([hostelId])
+  @@index([date])
+}
+
+model Deposit {
+  id           String    @id @default(uuid())
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id])
+  contractId   String    @unique
+  contract     Contract  @relation(fields: [contractId], references: [id])
+  hostelId     String
+  hostel       Hostel    @relation(fields: [hostelId], references: [id])
+  roomId       String
+  room         Room      @relation(fields: [roomId], references: [id])
+  amount       Float
+  date         DateTime  @default(now())
+  status       String    @default("Held") // Held | Partially Refunded | Refunded | Deducted
+  deductions   Float     @default(0)
+  refundAmount Float     @default(0)
+  refundDate   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([hostelId])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String?
+  before    Json?
+  after     Json?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
